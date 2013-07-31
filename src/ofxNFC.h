@@ -96,9 +96,52 @@ public:
     NFCMode mode;
 
     nfc_modulation nmModulations[5];
+    nfc_target MIFARE_EMULATION;
+    nfc_target MIFARE_DES_EMULATION;
+
+    bool  init_mfc_auth;
 
     ofxNFC () {
+
+
+    MIFARE_EMULATION.nm.nmt = NMT_ISO14443A,
+    MIFARE_EMULATION.nm.nbr = NBR_UNDEFINED,
+    MIFARE_EMULATION.nti.nai.abtAtqa[0] = 0x00;
+    MIFARE_EMULATION.nti.nai.abtAtqa[1] = 0x04;
+    MIFARE_EMULATION.nti.nai.abtUid[0] = 0x08;
+    MIFARE_EMULATION.nti.nai.abtUid[1] = 0xab;
+    MIFARE_EMULATION.nti.nai.abtUid[2] = 0xcd;
+    MIFARE_EMULATION.nti.nai.abtUid[3] = 0xef;
+    MIFARE_EMULATION.nti.nai.btSak = 0x09;
+    MIFARE_EMULATION.nti.nai.szUidLen = 4;
+    MIFARE_EMULATION.nti.nai.szAtsLen = 0;
+
+    nfc_target MIFARE_DES_EMULATION;
+
+    MIFARE_DES_EMULATION.nm.nmt = NMT_ISO14443A;
+    MIFARE_DES_EMULATION.nm.nbr = NBR_UNDEFINED;
+    MIFARE_DES_EMULATION.nti.nai.abtAtqa[0] = 0x03;
+    MIFARE_DES_EMULATION.nti.nai.abtAtqa[1] = 0x44;
+    MIFARE_DES_EMULATION.nti.nai.abtUid[0] = 0x08;
+    MIFARE_DES_EMULATION.nti.nai.abtUid[1] = 0xab;
+    MIFARE_DES_EMULATION.nti.nai.abtUid[2] = 0xcd;
+    MIFARE_DES_EMULATION.nti.nai.abtUid[3] = 0xef;
+
+    MIFARE_DES_EMULATION.nti.nai.btSak = 0x20,
+    MIFARE_DES_EMULATION.nti.nai.szUidLen = 4,
+    MIFARE_DES_EMULATION.nti.nai.abtAts[0] = 0x75;
+    MIFARE_DES_EMULATION.nti.nai.abtAts[1] = 0x77;
+    MIFARE_DES_EMULATION.nti.nai.abtAts[2] = 0x81;
+    MIFARE_DES_EMULATION.nti.nai.abtAts[3] = 0x02;
+    MIFARE_DES_EMULATION.nti.nai.abtAts[4] = 0x80;
+
+    MIFARE_DES_EMULATION.nti.nai.szAtsLen = 5;
+
+
         nfc_init(&context);
+
+init_mfc_auth = false;
+
     }
 
     ~ofxNFC() {
@@ -153,6 +196,9 @@ public:
             nfc_exit(context);
         }
 
+        messageToSend = msg;
+        conditionForSending = request;
+
         mode = SEND_CONDITIONAL;
 
         startThread(true, false);
@@ -185,11 +231,13 @@ public:
             nfc_exit(context);
         }
 
+
+        //messageToSend = msg;
         mode = MIFARE_FORMAT;
         startThread(true, false);
     }
 
-    void startMifareWrite()
+    void startMifareWrite( string msg )
     {
          if (nfc_initiator_init(pnd) < 0) {
             nfc_perror(pnd, "nfc_initiator_init");
@@ -197,6 +245,7 @@ public:
             nfc_exit(context);
         }
 
+        messageToSend = msg;
         mode = MIFARE_WRITE;
         startThread(true, false);
     }
@@ -355,61 +404,106 @@ public:
                     }
                     break;
                     case MIFARE_WRITE: {
-                        mifareWrite();
+
+                        if(mifareWrite())
+                        {
+                            ofxNFCEvent evt;
+                            evt.status = ofxNFCEvent::WRITE_SUCCESS;
+                            ofNotifyEvent(ofxNFCEvent::NFC_SEND_EVENT, evt);
+
+                        }
                     }
                     break;
                     case MIFARE_EMULATE:{
                         //
 
-                          nfc_target nt = {
-                            .nm = {
-                              .nmt = NMT_ISO14443A,
-                              .nbr = NBR_UNDEFINED,
-                            },
-                            .nti = {
-                              .nai = {
-                                .abtAtqa = { 0x00, 0x04 },
-                                .abtUid = { 0x08, 0xab, 0xcd, 0xef },
-                                .btSak = 0x09,
-                                .szUidLen = 4,
-                                .szAtsLen = 0,
-                              },
-                            },
-                          };
+                          size_t szTx, szRx;
+                          uint8_t abtRx[MAX_FRAME_LEN];
+                          uint8_t abtTx[MAX_FRAME_LEN];
 
-                          nfc_target_emulate_tag(pnd, &nt)
+
+
+                          bool success = false;
+
+                            success = target_io(&MIFARE_EMULATION, abtRx, (size_t) szRx, abtTx, &szTx);
+                            if (szTx) {
+                              if (nfc_target_send_bytes(pnd, abtTx, szTx, 0) < 0) {
+                                //nfc_perror(dev, "nfc_target_send_bytes");
+                                success = false;
+                              }
+                            }
+                            if (success) {
+                              if (init_mfc_auth) {
+                                nfc_device_set_property_bool(pnd, NP_HANDLE_CRC, false);
+                                init_mfc_auth = false;
+                              }
+                              if ((szRx = nfc_target_receive_bytes(pnd, abtRx, sizeof(abtRx), 0)) < 0) {
+                                //nfc_perror(dev, "nfc_target_receive_bytes");
+                                success = false;
+                               }
+                            }
+
+                          if(success)
+                          {
+                            ofxNFCEvent evt;
+                            evt.status = ofxNFCEvent::WRITE_SUCCESS;
+                            ofNotifyEvent(ofxNFCEvent::NFC_SEND_EVENT, evt);
+
+                          }
                     }
                     break;
                     case MIFARE_DES_EMULATE:{
-                        //
+                         size_t szTx, szRx;
+                          uint8_t abtRx[MAX_FRAME_LEN];
+                          uint8_t abtTx[MAX_FRAME_LEN];
+                         bool success = false;
 
-                        nfc_target nt = {
-                            .nm = {
-                              .nmt = NMT_ISO14443A,
-                              .nbr = NBR_UNDEFINED,
-                            },
-                            .nti = {
-                              .nai = {
-                                abtAtqa = { 0x03, 0x44 },
-                                abtUid = { 0x08, 0xab, 0xcd, 0xef },
-                                btSak = 0x20,
-                                .szUidLen = 4,
-                                .abtAts = { 0x75, 0x77, 0x81, 0x02, 0x80 },
-                                .szAtsLen = 5,
-                              },
-                            },
-                          };
+                            success = target_io(&MIFARE_DES_EMULATION, abtRx, (size_t) szRx, abtTx, &szTx);
+                            if (szTx) {
+                              if (nfc_target_send_bytes(pnd, abtTx, szTx, 0) < 0) {
+                                //nfc_perror(dev, "nfc_target_send_bytes");
+                                success =  false;
+                              }
+                            }
+                            if (success) {
+                              if (init_mfc_auth) {
+                                nfc_device_set_property_bool(pnd, NP_HANDLE_CRC, false);
+                                init_mfc_auth = false;
+                              }
+                              if ((szRx = nfc_target_receive_bytes(pnd, abtRx, sizeof(abtRx), 0)) < 0) {
+                                //nfc_perror(dev, "nfc_target_receive_bytes");
+                                success = false;
+                               }
+                            }
 
-                          nfc_target_emulate_tag(pnd, &nt)
+                          if(success)
+                          {
+
+                            ofxNFCEvent evt;
+                            evt.status = ofxNFCEvent::WRITE_SUCCESS;
+                            ofNotifyEvent(ofxNFCEvent::NFC_SEND_EVENT, evt);
+                          }
 
                     }
                     break;
                     case MIFARE_READ:{
-                        mifareRead();
+                        if(mifareRead() != "")
+                        {
+
+                            ofxNFCEvent evt;
+                            evt.status = ofxNFCEvent::WRITE_SUCCESS;
+                            ofNotifyEvent(ofxNFCEvent::NFC_SEND_EVENT, evt);
+                        }
                     }
                     break;
                     case MIFARE_FORMAT:{
-                        mifareFormat();
+                        if(mifareFormat())
+                        {
+
+                            ofxNFCEvent evt;
+                            evt.status = ofxNFCEvent::WRITE_SUCCESS;
+                            ofNotifyEvent(ofxNFCEvent::NFC_SEND_EVENT, evt);
+                        }
                     }
                     break;
                     default:
@@ -487,6 +581,11 @@ bool mifareFormat()
 
 bool mifareWrite() // returns whether we wrote anything or not
 {
+
+    const uint8_t *output = (uint8_t *) messageToSend.c_str();
+    size_t encoded_size;
+	uint8_t *tlv_data = tlv_encode (3, output, messageToSend.size(), &encoded_size);
+
 
     MifareClassicKey transport_key = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
@@ -573,11 +672,11 @@ bool mifareWrite() // returns whether we wrote anything or not
 		//}
 
         // what is this?
-                uint8_t *ndef_msg = (uint8_t*)ndef_default_msg;
+        /*uint8_t *ndef_msg = (uint8_t*)ndef_default_msg;
         size_t ndef_msg_len = sizeof(ndef_default_msg);
 
 		size_t encoded_size;
-		uint8_t *tlv_data = tlv_encode (3, ndef_msg, ndef_msg_len, &encoded_size);
+		uint8_t *tlv_data = tlv_encode (3, ndef_msg, ndef_msg_len, &encoded_size);*/
 
 		/*
 		 * At his point, we should have collected all information needed to
@@ -681,8 +780,6 @@ bool mifareWrite() // returns whether we wrote anything or not
 		    s++;
 		}
 
-
-//mifare_application_write (MifareTag tag, Mad mad, const MadAid aid, const void *buf, size_t nbytes, const MifareClassicKey key, const MifareClassicKeyType key_type);
 		if (encoded_size != (size_t) mifare_application_write (tags[i], mad, mad_nfcforum_aid, tlv_data, encoded_size, default_keyb, (MifareClassicKeyType) MCAB_WRITE_KEYB)) {
 		    //nfc_perror (device, "mifare_application_write");
 		    //error = EXIT_FAILURE;
@@ -701,7 +798,6 @@ bool mifareWrite() // returns whether we wrote anything or not
 string mifareRead()
 {
     tags = freefare_get_tags (pnd);
-
     string recv = "";
 
 	if (!tags) {
@@ -785,6 +881,7 @@ string mifareRead()
                     continue;
 			}*/
 
+            // copy the TLV data to the string
             stringstream ss;
             ss << tlv_data;
             recv = ss.str();
@@ -913,6 +1010,102 @@ int fix_mad_trailer_block (nfc_device *device, MifareTag tag, MifareClassicSecto
 	return -1;
     }
     return 0;
+}
+
+bool nfc_target_emulate_tag(nfc_device *dev, nfc_target *pnt)
+{
+  /*size_t szTx, szRx;
+  uint8_t abtRx[MAX_FRAME_LEN];
+  uint8_t abtTx[MAX_FRAME_LEN];
+  bool loop = true;
+
+  if ((szRx = nfc_target_init(dev, pnt, abtRx, sizeof(abtRx), 0)) < 0) {
+    //nfc_perror(dev, "nfc_target_init");
+    return false;
+  }
+
+  while (loop) {
+    loop = target_io(pnt, abtRx, (size_t) szRx, abtTx, &szTx);
+    if (szTx) {
+      if (nfc_target_send_bytes(dev, abtTx, szTx, 0) < 0) {
+        //nfc_perror(dev, "nfc_target_send_bytes");
+        return false;
+      }
+    }
+    if (loop) {
+      if (init_mfc_auth) {
+        nfc_device_set_property_bool(dev, NP_HANDLE_CRC, false);
+        init_mfc_auth = false;
+      }
+      if ((szRx = nfc_target_receive_bytes(dev, abtRx, sizeof(abtRx), 0)) < 0) {
+        //nfc_perror(dev, "nfc_target_receive_bytes");
+        return false;
+      }
+    }
+  }*/
+  return true;
+}
+
+bool target_io(nfc_target *pnt, const uint8_t *pbtInput, const size_t szInput, uint8_t *pbtOutput, size_t *pszOutput)
+{
+  bool loop = true;
+  *pszOutput = 0;
+
+  // Show transmitted command
+  /*if (!quiet_output) {
+    printf("    In: ");
+    print_hex(pbtInput, szInput);
+  }*/
+  if (szInput) {
+    switch (pbtInput[0]) {
+      case 0x30: // Mifare read
+        // block address is in pbtInput[1]
+        *pszOutput = 15;
+        strcpy((char *)pbtOutput, "You read block ");
+        pbtOutput[15] = pbtInput[1];
+        break;
+      case 0x50: // HLTA (ISO14443-3)
+        /*if (!quiet_output) {
+          printf("Initiator HLTA me. Bye!\n");
+        }*/
+        loop = false;
+        break;
+      case 0x60: // Mifare authA
+      case 0x61: // Mifare authB
+        // Let's give back a very random nonce...
+        *pszOutput = 2;
+        pbtOutput[0] = 0x12;
+        pbtOutput[1] = 0x34;
+        // Next commands will be without CRC
+        init_mfc_auth = true;
+        break;
+      case 0xe0: // RATS (ISO14443-4)
+        // Send ATS
+        *pszOutput = pnt->nti.nai.szAtsLen + 1;
+        pbtOutput[0] = pnt->nti.nai.szAtsLen + 1; // ISO14443-4 says that ATS contains ATS_Length as first byte
+        if (pnt->nti.nai.szAtsLen) {
+          memcpy(pbtOutput + 1, pnt->nti.nai.abtAts, pnt->nti.nai.szAtsLen);
+        }
+        break;
+      case 0xc2: // S-block DESELECT
+        /*if (!quiet_output) {
+          printf("Initiator DESELECT me. Bye!\n");
+        }*/
+        loop = false;
+        break;
+      default: // Unknown
+        /*if (!quiet_output) {
+          printf("Unknown frame, emulated target abort.\n");
+        }*/
+        loop = false;
+    }
+  }
+  // Show transmitted command
+  /*if ((!quiet_output) && *pszOutput) {
+    printf("    Out: ");
+    print_hex(pbtOutput, *pszOutput);
+  }*/
+  return loop;
 }
 
 };
